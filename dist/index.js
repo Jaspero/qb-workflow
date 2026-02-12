@@ -30011,9 +30011,10 @@ async function run() {
         }
         const triggerData = (await triggerResponse.json());
         const testId = triggerData.prTestId;
+        const dashboardUrl = triggerData.detailsUrl ||
+            `${apiUrl.replace("/api/v1", "")}/org/${orgId}/project/${projectId}/pr-test/${testId}`;
         core.info(`Test triggered successfully: ${testId}`);
         core.setOutput("test-id", testId);
-        const dashboardUrl = `${apiUrl.replace("/api/v1", "")}/org/${orgId}/project/${projectId}/pr-test/${testId}`;
         core.setOutput("dashboard-url", dashboardUrl);
         // Step 2: Wait for results (if enabled)
         if (!waitForResults) {
