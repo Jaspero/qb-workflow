@@ -272,7 +272,10 @@ async function postComment(
         const statusIcon = discovery.success ? "✅" : "❌";
         lines.push("", `**${statusIcon} ${discovery.targetComponent}**`);
         if (discovery.screenshotUrl) {
-          lines.push("", `![${discovery.targetComponent}](${discovery.screenshotUrl})`);
+          lines.push(
+            "",
+            `![${discovery.targetComponent}](${discovery.screenshotUrl})`,
+          );
         }
         if (discovery.error) {
           lines.push(`> ${discovery.error}`);
