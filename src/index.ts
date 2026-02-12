@@ -117,7 +117,9 @@ async function run(): Promise<void> {
         continue;
       }
 
-      const responseData = (await statusResponse.json()) as { prTest?: PRTestResponse };
+      const responseData = (await statusResponse.json()) as {
+        prTest?: PRTestResponse;
+      };
       testData = (responseData.prTest || responseData) as PRTestResponse;
       core.info(`Status: ${testData.status}`);
 
