@@ -1,0 +1,63 @@
+name: 'QualiBot Visual Testing'
+description: 'Automated visual testing for pull requests. Triggers QualiBot to discover and test UI changes.'
+author: 'Jaspero'
+
+branding:
+  icon: 'eye'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'QualiBot API key'
+    required: true
+  org-id:
+    description: 'QualiBot organization ID'
+    required: true
+  project-id:
+    description: 'QualiBot project ID'
+    required: true
+  target-url:
+    description: 'URL to test (e.g. preview deployment URL)'
+    required: true
+  wait-for-results:
+    description: 'Wait for test results before completing (true/false)'
+    required: false
+    default: 'true'
+  timeout:
+    description: 'Maximum time in seconds to wait for results'
+    required: false
+    default: '1800'
+  poll-interval:
+    description: 'Seconds between status checks'
+    required: false
+    default: '30'
+  fail-on-critical:
+    description: 'Fail the action if critical issues are found (true/false)'
+    required: false
+    default: 'true'
+  comment-on-pr:
+    description: 'Post a summary comment on the PR (true/false)'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GitHub token for posting PR comments (defaults to GITHUB_TOKEN)'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  test-id:
+    description: 'The QualiBot PR test ID'
+  status:
+    description: 'Final test status (completed, failed, timeout)'
+  result:
+    description: 'Test result (passed, failed, issues_found)'
+  total-issues:
+    description: 'Total number of issues found'
+  critical-issues:
+    description: 'Number of critical issues found'
+  dashboard-url:
+    description: 'URL to the test results in QualiBot dashboard'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
