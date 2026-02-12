@@ -29976,6 +29976,18 @@ async function run() {
         const failOnCritical = core.getInput("fail-on-critical") !== "false";
         const commentOnPR = core.getInput("comment-on-pr") !== "false";
         const githubToken = core.getInput("github-token");
+        const browsers = (core.getInput("browsers") || "chrome")
+            .split(",")
+            .map((b) => b.trim().toLowerCase())
+            .filter((b) => ["chrome", "firefox", "safari"].includes(b));
+        const viewports = (core.getInput("viewports") || "1920x1080")
+            .split(",")
+            .map((v) => {
+            const [w, h] = v.trim().split("x").map(Number);
+            return w && h ? { width: w, height: h } : null;
+        })
+            .filter(Boolean);
+        const scope = core.getInput("scope") || "pr-changes";
         const context = github.context;
         const pr = context.payload.pull_request;
         if (!pr) {
@@ -30003,6 +30015,9 @@ async function run() {
                 baseBranch: pr.base.ref,
                 headSha: pr.head.sha,
                 targetUrl,
+                browsers,
+                viewports,
+                scope,
             }),
         });
         if (!triggerResponse.ok) {

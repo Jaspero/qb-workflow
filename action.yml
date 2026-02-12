@@ -43,6 +43,18 @@ inputs:
     description: 'GitHub token for posting PR comments (defaults to GITHUB_TOKEN)'
     required: false
     default: ${{ github.token }}
+  browsers:
+    description: 'Comma-separated list of browsers to test in (chrome, firefox, safari)'
+    required: false
+    default: 'chrome'
+  viewports:
+    description: 'Comma-separated viewport dimensions as WIDTHxHEIGHT (e.g. 1920x1080,768x1024,375x812)'
+    required: false
+    default: '1920x1080'
+  scope:
+    description: 'Test scope: pr-changes (focus on PR diff) or full-page (general visual test)'
+    required: false
+    default: 'pr-changes'
 
 outputs:
   test-id:
