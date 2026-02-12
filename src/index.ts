@@ -103,9 +103,12 @@ async function run(): Promise<void> {
       const elapsed = Math.round((Date.now() - startTime) / 1000);
       core.info(`Checking status... (${elapsed}s elapsed)`);
 
-      const statusResponse = await fetch(`${apiUrl}/pr-tests/${testId}?projectId=${projectId}`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-      });
+      const statusResponse = await fetch(
+        `${apiUrl}/pr-tests/${testId}?projectId=${projectId}`,
+        {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        },
+      );
 
       if (!statusResponse.ok) {
         core.warning(
