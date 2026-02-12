@@ -30039,7 +30039,8 @@ async function run() {
                 core.warning(`Status check failed (${statusResponse.status}), retrying...`);
                 continue;
             }
-            testData = (await statusResponse.json());
+            const responseData = (await statusResponse.json());
+            testData = (responseData.prTest || responseData);
             core.info(`Status: ${testData.status}`);
             if (testData.status === "completed" || testData.status === "failed") {
                 finalStatus = testData.status;
