@@ -30065,6 +30065,8 @@ async function run() {
                 components: testData?.affectedComponents?.length || 0,
                 targetUrl,
                 dashboardUrl,
+                discoveries: testData?.discoveryResults || [],
+                issues: testData?.testResults || [],
             });
         }
         // Step 4: Log summary
@@ -30124,7 +30126,7 @@ async function postComment(token, context, data) {
             title = "Visual Tests Failed";
             details = "The test encountered errors during execution.";
         }
-        const body = [
+        const lines = [
             `## ${emoji} QualiBot: ${title}`,
             "",
             details,
@@ -30134,9 +30136,40 @@ async function postComment(token, context, data) {
             `| **Preview URL** | ${data.targetUrl} |`,
             `| **Issues** | ${data.totalIssues} total, ${data.criticalIssues} critical |`,
             `| **Components** | ${data.components} tested |`,
-            "",
-            `[View Full Results →](${data.dashboardUrl})`,
-        ].join("\n");
+        ];
+        // Add discovery screenshots
+        if (data.discoveries && data.discoveries.length > 0) {
+            lines.push("", "### Screenshots");
+            for (const discovery of data.discoveries) {
+                const statusIcon = discovery.success ? "✅" : "❌";
+                lines.push("", `**${statusIcon} ${discovery.targetComponent}**`);
+                if (discovery.screenshotUrl) {
+                    lines.push("", `![${discovery.targetComponent}](${discovery.screenshotUrl})`);
+                }
+                if (discovery.error) {
+                    lines.push(`> ${discovery.error}`);
+                }
+            }
+        }
+        // Add issues detail
+        if (data.issues && data.issues.length > 0) {
+            lines.push("", "### Issues Found");
+            lines.push("", "| Severity | Type | Title | Description |");
+            lines.push("|---|---|---|---|");
+            for (const issue of data.issues.slice(0, 10)) {
+                const severityIcon = issue.severity === "critical"
+                    ? "🔴"
+                    : issue.severity === "warning"
+                        ? "🟡"
+                        : "🔵";
+                lines.push(`| ${severityIcon} ${issue.severity} | ${issue.type} | ${issue.title} | ${issue.description.slice(0, 100)} |`);
+            }
+            if (data.issues.length > 10) {
+                lines.push("", `_...and ${data.issues.length - 10} more issues_`);
+            }
+        }
+        lines.push("", `[View Full Results →](${data.dashboardUrl})`);
+        const body = lines.join("\n");
         await octokit.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,

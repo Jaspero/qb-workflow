@@ -12,6 +12,21 @@ interface PRTestResponse {
     info: number;
   };
   affectedComponents?: Array<{ name: string; type: string }>;
+  discoveryResults?: Array<{
+    targetComponent: string;
+    success: boolean;
+    screenshotUrl?: string;
+    duration: number;
+    error?: string;
+    navigationPath?: Array<{ description: string }>;
+  }>;
+  testResults?: Array<{
+    type: string;
+    severity: string;
+    title: string;
+    description: string;
+    suggestion?: string;
+  }>;
   error?: string;
 }
 
@@ -148,6 +163,8 @@ async function run(): Promise<void> {
         components: testData?.affectedComponents?.length || 0,
         targetUrl,
         dashboardUrl,
+        discoveries: testData?.discoveryResults || [],
+        issues: testData?.testResults || [],
       });
     }
 
@@ -203,6 +220,8 @@ async function postComment(
     components: number;
     targetUrl: string;
     dashboardUrl: string;
+    discoveries: PRTestResponse["discoveryResults"];
+    issues: PRTestResponse["testResults"];
   },
 ): Promise<void> {
   try {
@@ -234,7 +253,7 @@ async function postComment(
       details = "The test encountered errors during execution.";
     }
 
-    const body = [
+    const lines = [
       `## ${emoji} QualiBot: ${title}`,
       "",
       details,
@@ -244,9 +263,47 @@ async function postComment(
       `| **Preview URL** | ${data.targetUrl} |`,
       `| **Issues** | ${data.totalIssues} total, ${data.criticalIssues} critical |`,
       `| **Components** | ${data.components} tested |`,
-      "",
-      `[View Full Results →](${data.dashboardUrl})`,
-    ].join("\n");
+    ];
+
+    // Add discovery screenshots
+    if (data.discoveries && data.discoveries.length > 0) {
+      lines.push("", "### Screenshots");
+      for (const discovery of data.discoveries) {
+        const statusIcon = discovery.success ? "✅" : "❌";
+        lines.push("", `**${statusIcon} ${discovery.targetComponent}**`);
+        if (discovery.screenshotUrl) {
+          lines.push("", `![${discovery.targetComponent}](${discovery.screenshotUrl})`);
+        }
+        if (discovery.error) {
+          lines.push(`> ${discovery.error}`);
+        }
+      }
+    }
+
+    // Add issues detail
+    if (data.issues && data.issues.length > 0) {
+      lines.push("", "### Issues Found");
+      lines.push("", "| Severity | Type | Title | Description |");
+      lines.push("|---|---|---|---|");
+      for (const issue of data.issues.slice(0, 10)) {
+        const severityIcon =
+          issue.severity === "critical"
+            ? "🔴"
+            : issue.severity === "warning"
+              ? "🟡"
+              : "🔵";
+        lines.push(
+          `| ${severityIcon} ${issue.severity} | ${issue.type} | ${issue.title} | ${issue.description.slice(0, 100)} |`,
+        );
+      }
+      if (data.issues.length > 10) {
+        lines.push("", `_...and ${data.issues.length - 10} more issues_`);
+      }
+    }
+
+    lines.push("", `[View Full Results →](${data.dashboardUrl})`);
+
+    const body = lines.join("\n");
 
     await octokit.rest.issues.createComment({
       owner: context.repo.owner,
