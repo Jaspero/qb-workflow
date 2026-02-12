@@ -29989,7 +29989,7 @@ async function run() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-API-Key': apiKey
+                'Authorization': `Bearer ${apiKey}`
             },
             body: JSON.stringify({
                 projectId,
@@ -30033,7 +30033,7 @@ async function run() {
             const elapsed = Math.round((Date.now() - startTime) / 1000);
             core.info(`Checking status... (${elapsed}s elapsed)`);
             const statusResponse = await fetch(`${apiUrl}/pr-tests/${testId}`, {
-                headers: { 'X-API-Key': apiKey }
+                headers: { 'Authorization': `Bearer ${apiKey}` }
             });
             if (!statusResponse.ok) {
                 core.warning(`Status check failed (${statusResponse.status}), retrying...`);

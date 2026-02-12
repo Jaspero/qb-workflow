@@ -45,7 +45,7 @@ async function run(): Promise<void> {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-API-Key': apiKey
+        'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
         projectId,
@@ -99,7 +99,7 @@ async function run(): Promise<void> {
       core.info(`Checking status... (${elapsed}s elapsed)`);
 
       const statusResponse = await fetch(`${apiUrl}/pr-tests/${testId}`, {
-        headers: { 'X-API-Key': apiKey }
+        headers: { 'Authorization': `Bearer ${apiKey}` }
       });
 
       if (!statusResponse.ok) {
