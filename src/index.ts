@@ -58,6 +58,59 @@ interface PRTestResponse {
       description: string;
     }>;
   }>;
+  functionalResults?: Array<{
+    planId: string;
+    planName: string;
+    featureName: string;
+    passed: boolean;
+    browser: string;
+    viewport: string;
+    duration: number;
+    scenarios: Array<{
+      name: string;
+      type: string;
+      passed: boolean;
+      stepResults: Array<{
+        action: string;
+        description: string;
+        success: boolean;
+        error?: string;
+      }>;
+      assertionResults: Array<{
+        type: string;
+        description: string;
+        passed: boolean;
+        expected?: string;
+        actual?: string;
+        error?: string;
+      }>;
+      capturedRequests: Array<{
+        method: string;
+        url: string;
+        status?: number;
+      }>;
+      screenshotUrl?: string;
+      issues: Array<{
+        severity: string;
+        title: string;
+        description: string;
+      }>;
+    }>;
+  }>;
+  codeAnalysis?: {
+    summary: string;
+    features: Array<{
+      name: string;
+      type: string;
+      description: string;
+      confidence: number;
+    }>;
+    apiEndpoints: Array<{
+      method: string;
+      url: string;
+      relatedFeature?: string;
+    }>;
+  };
   testCategories?: string[];
   testResults?: Array<{
     type: string;
@@ -236,6 +289,8 @@ async function run(): Promise<void> {
         issues: testData?.testResults || [],
         segmentScreenshots: testData?.segmentScreenshots || [],
         interactionResults: testData?.interactionResults || [],
+        functionalResults: testData?.functionalResults || [],
+        codeAnalysis: testData?.codeAnalysis || null,
         testCategories: testData?.testCategories || [],
         runNumber: testData?.runNumber || 1,
         scope,
@@ -298,6 +353,8 @@ async function postComment(
     issues: PRTestResponse["testResults"];
     segmentScreenshots: PRTestResponse["segmentScreenshots"];
     interactionResults: PRTestResponse["interactionResults"];
+    functionalResults: PRTestResponse["functionalResults"];
+    codeAnalysis: PRTestResponse["codeAnalysis"] | null;
     testCategories: string[];
     runNumber: number;
     scope: string;
@@ -401,6 +458,118 @@ async function postComment(
         if (discovery.error) {
           lines.push(`> ${discovery.error}`);
         }
+      }
+    }
+
+    // Add code analysis summary
+    if (data.codeAnalysis && data.codeAnalysis.features.length > 0) {
+      lines.push("", "### Code Analysis");
+      lines.push("");
+      lines.push(`> ${data.codeAnalysis.summary}`);
+      lines.push("");
+      lines.push("**Features identified from code:**");
+      for (const feature of data.codeAnalysis.features) {
+        const typeEmoji: Record<string, string> = {
+          form: "📝", navigation: "🔗", modal: "🪟", dropdown: "📋",
+          toggle: "🔀", search: "🔍", list: "📃", crud: "🗃️",
+          auth: "🔐", upload: "📤", other: "🔧"
+        };
+        lines.push(`- ${typeEmoji[feature.type] || "🔧"} **${feature.name}** (${feature.type}) — ${feature.description.slice(0, 120)}`);
+      }
+      if (data.codeAnalysis.apiEndpoints.length > 0) {
+        lines.push("");
+        lines.push("**API endpoints detected:**");
+        for (const ep of data.codeAnalysis.apiEndpoints) {
+          lines.push(`- \`${ep.method} ${ep.url}\`${ep.relatedFeature ? ` → ${ep.relatedFeature}` : ''}`);
+        }
+      }
+      lines.push("");
+    }
+
+    // Add functional test results
+    if (data.functionalResults && data.functionalResults.length > 0) {
+      lines.push("", "### Functional Tests");
+      lines.push("");
+
+      const totalScenarios = data.functionalResults.reduce((sum, fr) => sum + fr.scenarios.length, 0);
+      const passedScenarios = data.functionalResults.reduce(
+        (sum, fr) => sum + fr.scenarios.filter(s => s.passed).length, 0
+      );
+      const failedScenarios = totalScenarios - passedScenarios;
+
+      lines.push(`**${passedScenarios}** passed, **${failedScenarios}** failed out of **${totalScenarios}** test scenario(s) across **${data.functionalResults.length}** feature(s)`);
+      lines.push("");
+
+      for (const result of data.functionalResults) {
+        const icon = result.passed ? "✅" : "❌";
+        lines.push(`<details>`);
+        lines.push(`<summary>${icon} <strong>${result.featureName}</strong> [${result.browser} @ ${result.viewport}] — ${result.scenarios.length} scenario(s)</summary>`);
+        lines.push("");
+
+        for (const scenario of result.scenarios) {
+          const scenarioIcon = scenario.passed ? "✅" : "❌";
+          const typeLabel: Record<string, string> = {
+            "happy-path": "🟢 Happy Path",
+            "validation": "🟡 Validation",
+            "edge-case": "🟠 Edge Case",
+            "error-handling": "🔴 Error Handling",
+            "accessibility": "♿ Accessibility"
+          };
+
+          lines.push(`#### ${scenarioIcon} ${typeLabel[scenario.type] || scenario.type}: ${scenario.name}`);
+          lines.push("");
+
+          // Steps
+          if (scenario.stepResults.length > 0) {
+            lines.push("**Steps:**");
+            for (const step of scenario.stepResults) {
+              const stepIcon = step.success ? "✅" : "❌";
+              lines.push(`${stepIcon} ${step.description}${step.error ? ` — _${step.error}_` : ""}`);
+            }
+            lines.push("");
+          }
+
+          // Assertions
+          const failedAssertions = scenario.assertionResults.filter(a => !a.passed);
+          if (failedAssertions.length > 0) {
+            lines.push("**Failed Assertions:**");
+            for (const assertion of failedAssertions) {
+              lines.push(`❌ ${assertion.description}`);
+              if (assertion.expected) lines.push(`  Expected: ${assertion.expected}`);
+              if (assertion.actual) lines.push(`  Actual: ${assertion.actual}`);
+            }
+            lines.push("");
+          }
+
+          // Network requests
+          if (scenario.capturedRequests.length > 0) {
+            lines.push("**Network Requests:**");
+            for (const req of scenario.capturedRequests) {
+              const statusIcon = !req.status ? "⏳" : req.status < 400 ? "✅" : "❌";
+              lines.push(`${statusIcon} \`${req.method} ${req.url.split('?')[0]}\` → ${req.status || 'pending'}`);
+            }
+            lines.push("");
+          }
+
+          // Screenshot
+          if (scenario.screenshotUrl) {
+            lines.push(`![${scenario.name}](${scenario.screenshotUrl})`);
+            lines.push("");
+          }
+
+          // Issues
+          if (scenario.issues.length > 0) {
+            lines.push("**Issues:**");
+            for (const issue of scenario.issues) {
+              const sev = issue.severity === "critical" ? "🔴" : issue.severity === "warning" ? "🟡" : "🔵";
+              lines.push(`- ${sev} ${issue.title}: ${issue.description.slice(0, 120)}`);
+            }
+            lines.push("");
+          }
+        }
+
+        lines.push(`</details>`);
+        lines.push("");
       }
     }
 
