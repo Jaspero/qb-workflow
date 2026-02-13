@@ -30098,6 +30098,9 @@ async function run() {
                 issues: testData?.testResults || [],
                 segmentScreenshots: testData?.segmentScreenshots || [],
                 interactionResults: testData?.interactionResults || [],
+                functionalResults: testData?.functionalResults || [],
+                codeAnalysis: testData?.codeAnalysis || null,
+                testOverview: testData?.testOverview || null,
                 testCategories: testData?.testCategories || [],
                 runNumber: testData?.runNumber || 1,
                 scope,
@@ -30178,6 +30181,58 @@ async function postComment(token, context, data) {
         if (data.runNumber > 1) {
             lines.push(`| **Run** | #${data.runNumber} (includes context from ${data.runNumber - 1} previous run${data.runNumber - 1 > 1 ? 's' : ''}) |`);
         }
+        // Test Overview section — shows what was actually tested
+        if (data.testOverview) {
+            const ov = data.testOverview;
+            lines.push("", "### Test Overview");
+            lines.push("");
+            lines.push(`> ${ov.summary}`);
+            if (ov.codeAnalysisSummary) {
+                lines.push("");
+                lines.push(`**Code Analysis:** ${ov.codeAnalysisSummary}`);
+            }
+            if (ov.featuresIdentified.length > 0) {
+                lines.push("");
+                lines.push("**Features Identified:**");
+                for (const feature of ov.featuresIdentified) {
+                    const tested = feature.tested ? "✅ tested" : "⏭️ not tested";
+                    lines.push(`- **${feature.name}** (${feature.type}) — ${tested}`);
+                }
+            }
+            if (ov.formSubmissions.length > 0) {
+                lines.push("");
+                lines.push("**Form Submissions:**");
+                for (const fs of ov.formSubmissions) {
+                    const icon = fs.submitted ? "✅" : "❌";
+                    lines.push(`${icon} **${fs.formName}**`);
+                    if (fs.fieldsFilled.length > 0) {
+                        lines.push("");
+                        lines.push("| Field | Value |");
+                        lines.push("|---|---|");
+                        for (const field of fs.fieldsFilled) {
+                            lines.push(`| ${field.field} | ${field.value} |`);
+                        }
+                    }
+                    if (fs.apiRequest) {
+                        const statusIcon = !fs.apiRequest.status ? "⏳" : fs.apiRequest.status < 400 ? "✅" : "❌";
+                        lines.push(`${statusIcon} \`${fs.apiRequest.method} ${fs.apiRequest.url.split('?')[0]}\` → ${fs.apiRequest.status || 'pending'}`);
+                    }
+                    lines.push(`Result: **${fs.result}**`);
+                    lines.push("");
+                }
+            }
+            if (ov.testsRun.length > 0) {
+                lines.push("**Tests Executed:**");
+                for (const test of ov.testsRun) {
+                    const icon = test.result === 'passed' ? '✅' : '❌';
+                    lines.push(`- ${icon} **${test.name}** [${test.browser} @ ${test.viewport}] (${(test.duration / 1000).toFixed(1)}s)`);
+                    lines.push(`  ${test.details}`);
+                }
+                lines.push("");
+            }
+            lines.push(`**Total Duration:** ${(ov.totalDuration / 1000).toFixed(1)}s`);
+            lines.push("");
+        }
         // Add segment screenshots for pr-changes scope
         if (data.scope === 'pr-changes' && data.segmentScreenshots && data.segmentScreenshots.length > 0) {
             lines.push("", "### Changed Segment Screenshots");
@@ -30222,6 +30277,105 @@ async function postComment(token, context, data) {
                 }
             }
         }
+        // Add code analysis summary
+        if (data.codeAnalysis && data.codeAnalysis.features.length > 0) {
+            lines.push("", "### Code Analysis");
+            lines.push("");
+            lines.push(`> ${data.codeAnalysis.summary}`);
+            lines.push("");
+            lines.push("**Features identified from code:**");
+            for (const feature of data.codeAnalysis.features) {
+                const typeEmoji = {
+                    form: "📝", navigation: "🔗", modal: "🪟", dropdown: "📋",
+                    toggle: "🔀", search: "🔍", list: "📃", crud: "🗃️",
+                    auth: "🔐", upload: "📤", other: "🔧"
+                };
+                lines.push(`- ${typeEmoji[feature.type] || "🔧"} **${feature.name}** (${feature.type}) — ${feature.description.slice(0, 120)}`);
+            }
+            if (data.codeAnalysis.apiEndpoints.length > 0) {
+                lines.push("");
+                lines.push("**API endpoints detected:**");
+                for (const ep of data.codeAnalysis.apiEndpoints) {
+                    lines.push(`- \`${ep.method} ${ep.url}\`${ep.relatedFeature ? ` → ${ep.relatedFeature}` : ''}`);
+                }
+            }
+            lines.push("");
+        }
+        // Add functional test results
+        if (data.functionalResults && data.functionalResults.length > 0) {
+            lines.push("", "### Functional Tests");
+            lines.push("");
+            const totalScenarios = data.functionalResults.reduce((sum, fr) => sum + fr.scenarios.length, 0);
+            const passedScenarios = data.functionalResults.reduce((sum, fr) => sum + fr.scenarios.filter(s => s.passed).length, 0);
+            const failedScenarios = totalScenarios - passedScenarios;
+            lines.push(`**${passedScenarios}** passed, **${failedScenarios}** failed out of **${totalScenarios}** test scenario(s) across **${data.functionalResults.length}** feature(s)`);
+            lines.push("");
+            for (const result of data.functionalResults) {
+                const icon = result.passed ? "✅" : "❌";
+                lines.push(`<details>`);
+                lines.push(`<summary>${icon} <strong>${result.featureName}</strong> [${result.browser} @ ${result.viewport}] — ${result.scenarios.length} scenario(s)</summary>`);
+                lines.push("");
+                for (const scenario of result.scenarios) {
+                    const scenarioIcon = scenario.passed ? "✅" : "❌";
+                    const typeLabel = {
+                        "happy-path": "🟢 Happy Path",
+                        "validation": "🟡 Validation",
+                        "edge-case": "🟠 Edge Case",
+                        "error-handling": "🔴 Error Handling",
+                        "accessibility": "♿ Accessibility"
+                    };
+                    lines.push(`#### ${scenarioIcon} ${typeLabel[scenario.type] || scenario.type}: ${scenario.name}`);
+                    lines.push("");
+                    // Steps
+                    if (scenario.stepResults.length > 0) {
+                        lines.push("**Steps:**");
+                        for (const step of scenario.stepResults) {
+                            const stepIcon = step.success ? "✅" : "❌";
+                            lines.push(`${stepIcon} ${step.description}${step.error ? ` — _${step.error}_` : ""}`);
+                        }
+                        lines.push("");
+                    }
+                    // Assertions
+                    const failedAssertions = scenario.assertionResults.filter(a => !a.passed);
+                    if (failedAssertions.length > 0) {
+                        lines.push("**Failed Assertions:**");
+                        for (const assertion of failedAssertions) {
+                            lines.push(`❌ ${assertion.description}`);
+                            if (assertion.expected)
+                                lines.push(`  Expected: ${assertion.expected}`);
+                            if (assertion.actual)
+                                lines.push(`  Actual: ${assertion.actual}`);
+                        }
+                        lines.push("");
+                    }
+                    // Network requests
+                    if (scenario.capturedRequests.length > 0) {
+                        lines.push("**Network Requests:**");
+                        for (const req of scenario.capturedRequests) {
+                            const statusIcon = !req.status ? "⏳" : req.status < 400 ? "✅" : "❌";
+                            lines.push(`${statusIcon} \`${req.method} ${req.url.split('?')[0]}\` → ${req.status || 'pending'}`);
+                        }
+                        lines.push("");
+                    }
+                    // Screenshot
+                    if (scenario.screenshotUrl) {
+                        lines.push(`![${scenario.name}](${scenario.screenshotUrl})`);
+                        lines.push("");
+                    }
+                    // Issues
+                    if (scenario.issues.length > 0) {
+                        lines.push("**Issues:**");
+                        for (const issue of scenario.issues) {
+                            const sev = issue.severity === "critical" ? "🔴" : issue.severity === "warning" ? "🟡" : "🔵";
+                            lines.push(`- ${sev} ${issue.title}: ${issue.description.slice(0, 120)}`);
+                        }
+                        lines.push("");
+                    }
+                }
+                lines.push(`</details>`);
+                lines.push("");
+            }
+        }
         // Add interaction test results
         if (data.interactionResults && data.interactionResults.length > 0) {
             lines.push("", "### Interaction Tests");
@@ -30252,6 +30406,14 @@ async function postComment(token, context, data) {
                     for (const step of result.steps) {
                         const stepIcon = step.success ? "✅" : "❌";
                         lines.push(`${stepIcon} ${step.description}${step.error ? ` — _${step.error}_` : ""}`);
+                    }
+                    lines.push("");
+                }
+                if (result.capturedRequests && result.capturedRequests.length > 0) {
+                    lines.push("**Network Requests:**");
+                    for (const req of result.capturedRequests) {
+                        const statusIcon = !req.status ? "⏳" : req.status < 400 ? "✅" : "❌";
+                        lines.push(`${statusIcon} \`${req.method} ${req.url.split('?')[0]}\` → ${req.status || 'pending'}`);
                     }
                     lines.push("");
                 }

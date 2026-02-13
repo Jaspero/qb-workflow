@@ -57,6 +57,11 @@ interface PRTestResponse {
       title: string;
       description: string;
     }>;
+    capturedRequests?: Array<{
+      method: string;
+      url: string;
+      status?: number;
+    }>;
   }>;
   functionalResults?: Array<{
     planId: string;
@@ -110,6 +115,36 @@ interface PRTestResponse {
       url: string;
       relatedFeature?: string;
     }>;
+  };
+  testOverview?: {
+    summary: string;
+    codeAnalysisSummary?: string;
+    featuresIdentified: Array<{
+      name: string;
+      type: string;
+      tested: boolean;
+    }>;
+    testsRun: Array<{
+      name: string;
+      type: string;
+      result: 'passed' | 'failed';
+      details: string;
+      browser: string;
+      viewport: string;
+      duration: number;
+    }>;
+    formSubmissions: Array<{
+      formName: string;
+      fieldsFilled: Array<{ field: string; value: string }>;
+      submitted: boolean;
+      apiRequest?: {
+        method: string;
+        url: string;
+        status?: number;
+      };
+      result: string;
+    }>;
+    totalDuration: number;
   };
   testCategories?: string[];
   testResults?: Array<{
@@ -291,6 +326,7 @@ async function run(): Promise<void> {
         interactionResults: testData?.interactionResults || [],
         functionalResults: testData?.functionalResults || [],
         codeAnalysis: testData?.codeAnalysis || null,
+        testOverview: testData?.testOverview || null,
         testCategories: testData?.testCategories || [],
         runNumber: testData?.runNumber || 1,
         scope,
@@ -355,6 +391,7 @@ async function postComment(
     interactionResults: PRTestResponse["interactionResults"];
     functionalResults: PRTestResponse["functionalResults"];
     codeAnalysis: PRTestResponse["codeAnalysis"] | null;
+    testOverview: PRTestResponse["testOverview"] | null;
     testCategories: string[];
     runNumber: number;
     scope: string;
@@ -408,6 +445,66 @@ async function postComment(
 
     if (data.runNumber > 1) {
       lines.push(`| **Run** | #${data.runNumber} (includes context from ${data.runNumber - 1} previous run${data.runNumber - 1 > 1 ? 's' : ''}) |`);
+    }
+
+    // Test Overview section — shows what was actually tested
+    if (data.testOverview) {
+      const ov = data.testOverview;
+      lines.push("", "### Test Overview");
+      lines.push("");
+      lines.push(`> ${ov.summary}`);
+
+      if (ov.codeAnalysisSummary) {
+        lines.push("");
+        lines.push(`**Code Analysis:** ${ov.codeAnalysisSummary}`);
+      }
+
+      if (ov.featuresIdentified.length > 0) {
+        lines.push("");
+        lines.push("**Features Identified:**");
+        for (const feature of ov.featuresIdentified) {
+          const tested = feature.tested ? "✅ tested" : "⏭️ not tested";
+          lines.push(`- **${feature.name}** (${feature.type}) — ${tested}`);
+        }
+      }
+
+      if (ov.formSubmissions.length > 0) {
+        lines.push("");
+        lines.push("**Form Submissions:**");
+        for (const fs of ov.formSubmissions) {
+          const icon = fs.submitted ? "✅" : "❌";
+          lines.push(`${icon} **${fs.formName}**`);
+
+          if (fs.fieldsFilled.length > 0) {
+            lines.push("");
+            lines.push("| Field | Value |");
+            lines.push("|---|---|");
+            for (const field of fs.fieldsFilled) {
+              lines.push(`| ${field.field} | ${field.value} |`);
+            }
+          }
+
+          if (fs.apiRequest) {
+            const statusIcon = !fs.apiRequest.status ? "⏳" : fs.apiRequest.status < 400 ? "✅" : "❌";
+            lines.push(`${statusIcon} \`${fs.apiRequest.method} ${fs.apiRequest.url.split('?')[0]}\` → ${fs.apiRequest.status || 'pending'}`);
+          }
+          lines.push(`Result: **${fs.result}**`);
+          lines.push("");
+        }
+      }
+
+      if (ov.testsRun.length > 0) {
+        lines.push("**Tests Executed:**");
+        for (const test of ov.testsRun) {
+          const icon = test.result === 'passed' ? '✅' : '❌';
+          lines.push(`- ${icon} **${test.name}** [${test.browser} @ ${test.viewport}] (${(test.duration / 1000).toFixed(1)}s)`);
+          lines.push(`  ${test.details}`);
+        }
+        lines.push("");
+      }
+
+      lines.push(`**Total Duration:** ${(ov.totalDuration / 1000).toFixed(1)}s`);
+      lines.push("");
     }
 
     // Add segment screenshots for pr-changes scope
@@ -607,6 +704,15 @@ async function postComment(
           for (const step of result.steps) {
             const stepIcon = step.success ? "✅" : "❌";
             lines.push(`${stepIcon} ${step.description}${step.error ? ` — _${step.error}_` : ""}`);
+          }
+          lines.push("");
+        }
+
+        if (result.capturedRequests && result.capturedRequests.length > 0) {
+          lines.push("**Network Requests:**");
+          for (const req of result.capturedRequests) {
+            const statusIcon = !req.status ? "⏳" : req.status < 400 ? "✅" : "❌";
+            lines.push(`${statusIcon} \`${req.method} ${req.url.split('?')[0]}\` → ${req.status || 'pending'}`);
           }
           lines.push("");
         }
