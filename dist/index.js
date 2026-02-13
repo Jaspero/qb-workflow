@@ -29988,6 +29988,15 @@ async function run() {
         })
             .filter(Boolean);
         const scope = core.getInput("scope") || "pr-changes";
+        const validTestCategories = ["visual", "interaction", "accessibility", "responsive", "performance"];
+        const testTypes = (core.getInput("test-types") || "")
+            .split(",")
+            .map((t) => t.trim().toLowerCase())
+            .filter((t) => validTestCategories.includes(t));
+        const excludeTests = (core.getInput("exclude-tests") || "")
+            .split(",")
+            .map((t) => t.trim().toLowerCase())
+            .filter((t) => validTestCategories.includes(t));
         const context = github.context;
         const pr = context.payload.pull_request;
         if (!pr) {
@@ -30018,6 +30027,8 @@ async function run() {
                 browsers,
                 viewports,
                 scope,
+                ...(testTypes.length > 0 ? { testCategories: testTypes } : {}),
+                ...(excludeTests.length > 0 ? { excludeTests } : {}),
             }),
         });
         if (!triggerResponse.ok) {
@@ -30026,8 +30037,10 @@ async function run() {
         }
         const triggerData = (await triggerResponse.json());
         const testId = triggerData.prTestId;
-        const dashboardUrl = triggerData.detailsUrl ||
-            `${apiUrl.replace("/api/v1", "")}/org/${orgId}/project/${projectId}/pr-test/${testId}`;
+        const appBaseUrl = apiUrl.replace("/api/v1", "");
+        // Use /view/:testId redirect — avoids org/project IDs in the URL
+        // which would get masked by GitHub Actions secret redaction
+        const dashboardUrl = `${appBaseUrl}/view/${testId}`;
         core.info(`Test triggered successfully: ${testId}`);
         core.setOutput("test-id", testId);
         core.setOutput("dashboard-url", dashboardUrl);
@@ -30083,6 +30096,11 @@ async function run() {
                 dashboardUrl,
                 discoveries: testData?.discoveryResults || [],
                 issues: testData?.testResults || [],
+                segmentScreenshots: testData?.segmentScreenshots || [],
+                interactionResults: testData?.interactionResults || [],
+                testCategories: testData?.testCategories || [],
+                runNumber: testData?.runNumber || 1,
+                scope,
             });
         }
         // Step 4: Log summary
@@ -30143,7 +30161,7 @@ async function postComment(token, context, data) {
             details = "The test encountered errors during execution.";
         }
         const lines = [
-            `## ${emoji} QualiBot: ${title}`,
+            `## ${emoji} QualiBot: ${title}${data.runNumber > 1 ? ` (Run #${data.runNumber})` : ''}`,
             "",
             details,
             "",
@@ -30152,13 +30170,50 @@ async function postComment(token, context, data) {
             `| **Preview URL** | ${data.targetUrl} |`,
             `| **Issues** | ${data.totalIssues} total, ${data.criticalIssues} critical |`,
             `| **Components** | ${data.components} tested |`,
+            `| **Scope** | ${data.scope === 'pr-changes' ? 'PR Changes Only' : 'Full Page'} |`,
         ];
+        if (data.testCategories.length > 0) {
+            lines.push(`| **Test Types** | ${data.testCategories.join(', ')} |`);
+        }
+        if (data.runNumber > 1) {
+            lines.push(`| **Run** | #${data.runNumber} (includes context from ${data.runNumber - 1} previous run${data.runNumber - 1 > 1 ? 's' : ''}) |`);
+        }
+        // Add segment screenshots for pr-changes scope
+        if (data.scope === 'pr-changes' && data.segmentScreenshots && data.segmentScreenshots.length > 0) {
+            lines.push("", "### Changed Segment Screenshots");
+            lines.push("");
+            lines.push("Screenshots of the changed component segments across all tested browsers and viewports:");
+            lines.push("");
+            // Group by component name
+            const byComponent = new Map();
+            for (const seg of data.segmentScreenshots) {
+                const existing = byComponent.get(seg.componentName) || [];
+                existing.push(seg);
+                byComponent.set(seg.componentName, existing);
+            }
+            for (const [componentName, segments] of byComponent) {
+                lines.push(`<details>`);
+                lines.push(`<summary><strong>${componentName}</strong> (${segments.length} screenshot${segments.length > 1 ? 's' : ''})</summary>`);
+                lines.push("");
+                for (const seg of segments) {
+                    lines.push(`**${seg.browser} @ ${seg.viewport}**`);
+                    lines.push("");
+                    lines.push(`![${componentName} - ${seg.browser} ${seg.viewport}](${seg.screenshotUrl})`);
+                    lines.push("");
+                }
+                lines.push(`</details>`);
+                lines.push("");
+            }
+        }
         // Add discovery screenshots
         if (data.discoveries && data.discoveries.length > 0) {
-            lines.push("", "### Screenshots");
+            lines.push("", "### Full Page Screenshots");
             for (const discovery of data.discoveries) {
                 const statusIcon = discovery.success ? "✅" : "❌";
-                lines.push("", `**${statusIcon} ${discovery.targetComponent}**`);
+                const browserInfo = discovery.browser && discovery.viewport
+                    ? ` [${discovery.browser} @ ${discovery.viewport}]`
+                    : '';
+                lines.push("", `**${statusIcon} ${discovery.targetComponent}${browserInfo}**`);
                 if (discovery.screenshotUrl) {
                     lines.push("", `![${discovery.targetComponent}](${discovery.screenshotUrl})`);
                 }
@@ -30167,18 +30222,77 @@ async function postComment(token, context, data) {
                 }
             }
         }
+        // Add interaction test results
+        if (data.interactionResults && data.interactionResults.length > 0) {
+            lines.push("", "### Interaction Tests");
+            lines.push("");
+            const passed = data.interactionResults.filter((r) => r.passed).length;
+            const failed = data.interactionResults.length - passed;
+            lines.push(`**${passed}** passed, **${failed}** failed out of **${data.interactionResults.length}** interaction test(s)`);
+            lines.push("");
+            for (const result of data.interactionResults) {
+                const icon = result.passed ? "✅" : "❌";
+                const typeEmoji = {
+                    form: "📝",
+                    navigation: "🔗",
+                    modal: "🪟",
+                    dropdown: "📋",
+                    toggle: "🔀",
+                    animation: "✨",
+                    "api-call": "🌐",
+                    other: "🔧",
+                }[result.behaviorType] || "🔧";
+                lines.push(`<details>`);
+                lines.push(`<summary>${icon} ${typeEmoji} <strong>${result.name}</strong> [${result.browser} @ ${result.viewport}]</summary>`);
+                lines.push("");
+                lines.push(`> ${result.description}`);
+                lines.push("");
+                if (result.steps.length > 0) {
+                    lines.push("**Steps:**");
+                    for (const step of result.steps) {
+                        const stepIcon = step.success ? "✅" : "❌";
+                        lines.push(`${stepIcon} ${step.description}${step.error ? ` — _${step.error}_` : ""}`);
+                    }
+                    lines.push("");
+                }
+                if (result.screenshotBefore || result.screenshotAfter) {
+                    if (result.screenshotBefore) {
+                        lines.push(`**Before:** ![Before](${result.screenshotBefore})`);
+                    }
+                    if (result.screenshotAfter) {
+                        lines.push(`**After:** ![After](${result.screenshotAfter})`);
+                    }
+                    lines.push("");
+                }
+                if (result.issues.length > 0) {
+                    lines.push("**Issues:**");
+                    for (const issue of result.issues) {
+                        const sev = issue.severity === "critical" ? "🔴" : issue.severity === "warning" ? "🟡" : "🔵";
+                        lines.push(`- ${sev} ${issue.title}: ${issue.description.slice(0, 120)}`);
+                    }
+                    lines.push("");
+                }
+                lines.push(`</details>`);
+                lines.push("");
+            }
+        }
         // Add issues detail
         if (data.issues && data.issues.length > 0) {
             lines.push("", "### Issues Found");
-            lines.push("", "| Severity | Type | Title | Description |");
-            lines.push("|---|---|---|---|");
+            lines.push("", "| Severity | Type | Title | Description | Status |");
+            lines.push("|---|---|---|---|---|");
             for (const issue of data.issues.slice(0, 10)) {
                 const severityIcon = issue.severity === "critical"
                     ? "🔴"
                     : issue.severity === "warning"
                         ? "🟡"
                         : "🔵";
-                lines.push(`| ${severityIcon} ${issue.severity} | ${issue.type} | ${issue.title} | ${issue.description.slice(0, 100)} |`);
+                const statusLabel = issue.status
+                    ? issue.status === 'regressed' ? '⬆️ Regressed'
+                        : issue.status === 'recurring' ? '🔄 Recurring'
+                            : '🆕 New'
+                    : '';
+                lines.push(`| ${severityIcon} ${issue.severity} | ${issue.type} | ${issue.title} | ${issue.description.slice(0, 100)} | ${statusLabel} |`);
             }
             if (data.issues.length > 10) {
                 lines.push("", `_...and ${data.issues.length - 10} more issues_`);
@@ -30199,18 +30313,18 @@ async function postComment(token, context, data) {
     }
 }
 function logSummary(status, result, totalIssues, criticalIssues, dashboardUrl) {
+    const emoji = result === 'passed' ? '✅' : criticalIssues > 0 ? '🚨' : totalIssues > 0 ? '⚠️' : '❌';
+    const summaryMd = [
+        `## ${emoji} QualiBot Visual Testing Results`,
+        '',
+        '| Status | Result | Issues | Critical |',
+        '|--------|--------|--------|----------|',
+        `| ${status} | ${result} | ${totalIssues} | ${criticalIssues} |`,
+        '',
+        `[View Full Results →](${dashboardUrl})`,
+    ].join('\n');
     core.summary
-        .addHeading("QualiBot Visual Testing Results")
-        .addTable([
-        [
-            { data: "Status", header: true },
-            { data: "Result", header: true },
-            { data: "Issues", header: true },
-            { data: "Critical", header: true },
-        ],
-        [status, result, totalIssues.toString(), criticalIssues.toString()],
-    ])
-        .addLink("View Full Results", dashboardUrl)
+        .addRaw(summaryMd)
         .write();
 }
 function sleep(ms) {

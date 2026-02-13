@@ -155,7 +155,9 @@ async function run(): Promise<void> {
     const triggerData = (await triggerResponse.json()) as PRTestResponse;
     const testId = triggerData.prTestId;
     const appBaseUrl = apiUrl.replace("/api/v1", "");
-    const dashboardUrl = `${appBaseUrl}/org/${orgId}/project/${projectId}/pr-test/${testId}`;
+    // Use /view/:testId redirect — avoids org/project IDs in the URL
+    // which would get masked by GitHub Actions secret redaction
+    const dashboardUrl = `${appBaseUrl}/view/${testId}`;
 
     core.info(`Test triggered successfully: ${testId}`);
     core.setOutput("test-id", testId);
