@@ -6,6 +6,8 @@ interface PRTestResponse {
   detailsUrl?: string;
   status: string;
   result?: string;
+  runNumber?: number;
+  previousRunCount?: number;
   issuesSummary?: {
     total: number;
     critical: number;
@@ -19,7 +21,21 @@ interface PRTestResponse {
     screenshotUrl?: string;
     duration: number;
     error?: string;
+    browser?: string;
+    viewport?: string;
     navigationPath?: Array<{ description: string }>;
+    segmentScreenshots?: Array<{
+      browser: string;
+      viewport: string;
+      componentName: string;
+      screenshotUrl: string;
+    }>;
+  }>;
+  segmentScreenshots?: Array<{
+    browser: string;
+    viewport: string;
+    componentName: string;
+    screenshotUrl: string;
   }>;
   testResults?: Array<{
     type: string;
@@ -27,7 +43,9 @@ interface PRTestResponse {
     title: string;
     description: string;
     suggestion?: string;
+    status?: string;
   }>;
+  scope?: string;
   error?: string;
 }
 
@@ -182,6 +200,9 @@ async function run(): Promise<void> {
         dashboardUrl,
         discoveries: testData?.discoveryResults || [],
         issues: testData?.testResults || [],
+        segmentScreenshots: testData?.segmentScreenshots || [],
+        runNumber: testData?.runNumber || 1,
+        scope,
       });
     }
 
@@ -239,6 +260,9 @@ async function postComment(
     dashboardUrl: string;
     discoveries: PRTestResponse["discoveryResults"];
     issues: PRTestResponse["testResults"];
+    segmentScreenshots: PRTestResponse["segmentScreenshots"];
+    runNumber: number;
+    scope: string;
   },
 ): Promise<void> {
   try {
@@ -271,7 +295,7 @@ async function postComment(
     }
 
     const lines = [
-      `## ${emoji} QualiBot: ${title}`,
+      `## ${emoji} QualiBot: ${title}${data.runNumber > 1 ? ` (Run #${data.runNumber})` : ''}`,
       "",
       details,
       "",
@@ -280,14 +304,52 @@ async function postComment(
       `| **Preview URL** | ${data.targetUrl} |`,
       `| **Issues** | ${data.totalIssues} total, ${data.criticalIssues} critical |`,
       `| **Components** | ${data.components} tested |`,
+      `| **Scope** | ${data.scope === 'pr-changes' ? 'PR Changes Only' : 'Full Page'} |`,
     ];
+
+    if (data.runNumber > 1) {
+      lines.push(`| **Run** | #${data.runNumber} (includes context from ${data.runNumber - 1} previous run${data.runNumber - 1 > 1 ? 's' : ''}) |`);
+    }
+
+    // Add segment screenshots for pr-changes scope
+    if (data.scope === 'pr-changes' && data.segmentScreenshots && data.segmentScreenshots.length > 0) {
+      lines.push("", "### Changed Segment Screenshots");
+      lines.push("");
+      lines.push("Screenshots of the changed component segments across all tested browsers and viewports:");
+      lines.push("");
+
+      // Group by component name
+      const byComponent = new Map<string, typeof data.segmentScreenshots>();
+      for (const seg of data.segmentScreenshots!) {
+        const existing = byComponent.get(seg.componentName) || [];
+        existing.push(seg);
+        byComponent.set(seg.componentName, existing);
+      }
+
+      for (const [componentName, segments] of byComponent) {
+        lines.push(`<details>`);
+        lines.push(`<summary><strong>${componentName}</strong> (${segments.length} screenshot${segments.length > 1 ? 's' : ''})</summary>`);
+        lines.push("");
+        for (const seg of segments) {
+          lines.push(`**${seg.browser} @ ${seg.viewport}**`);
+          lines.push("");
+          lines.push(`![${componentName} - ${seg.browser} ${seg.viewport}](${seg.screenshotUrl})`);
+          lines.push("");
+        }
+        lines.push(`</details>`);
+        lines.push("");
+      }
+    }
 
     // Add discovery screenshots
     if (data.discoveries && data.discoveries.length > 0) {
-      lines.push("", "### Screenshots");
+      lines.push("", "### Full Page Screenshots");
       for (const discovery of data.discoveries) {
         const statusIcon = discovery.success ? "✅" : "❌";
-        lines.push("", `**${statusIcon} ${discovery.targetComponent}**`);
+        const browserInfo = discovery.browser && discovery.viewport
+          ? ` [${discovery.browser} @ ${discovery.viewport}]`
+          : '';
+        lines.push("", `**${statusIcon} ${discovery.targetComponent}${browserInfo}**`);
         if (discovery.screenshotUrl) {
           lines.push(
             "",
@@ -303,8 +365,8 @@ async function postComment(
     // Add issues detail
     if (data.issues && data.issues.length > 0) {
       lines.push("", "### Issues Found");
-      lines.push("", "| Severity | Type | Title | Description |");
-      lines.push("|---|---|---|---|");
+      lines.push("", "| Severity | Type | Title | Description | Status |");
+      lines.push("|---|---|---|---|---|");
       for (const issue of data.issues.slice(0, 10)) {
         const severityIcon =
           issue.severity === "critical"
@@ -312,8 +374,13 @@ async function postComment(
             : issue.severity === "warning"
               ? "🟡"
               : "🔵";
+        const statusLabel = issue.status
+          ? issue.status === 'regressed' ? '⬆️ Regressed'
+            : issue.status === 'recurring' ? '🔄 Recurring'
+            : '🆕 New'
+          : '';
         lines.push(
-          `| ${severityIcon} ${issue.severity} | ${issue.type} | ${issue.title} | ${issue.description.slice(0, 100)} |`,
+          `| ${severityIcon} ${issue.severity} | ${issue.type} | ${issue.title} | ${issue.description.slice(0, 100)} | ${statusLabel} |`,
         );
       }
       if (data.issues.length > 10) {
