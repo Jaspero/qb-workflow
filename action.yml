@@ -55,6 +55,14 @@ inputs:
     description: 'Test scope: pr-changes (focus on PR diff) or full-page (general visual test)'
     required: false
     default: 'pr-changes'
+  test-types:
+    description: 'Comma-separated list of test categories to run: visual, interaction, accessibility, responsive, performance. Default runs all.'
+    required: false
+    default: ''
+  exclude-tests:
+    description: 'Comma-separated list of test categories to exclude: visual, interaction, accessibility, responsive, performance'
+    required: false
+    default: ''
 
 outputs:
   test-id:

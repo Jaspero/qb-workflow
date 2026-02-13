@@ -37,6 +37,28 @@ interface PRTestResponse {
     componentName: string;
     screenshotUrl: string;
   }>;
+  interactionResults?: Array<{
+    behaviorType: string;
+    name: string;
+    description: string;
+    passed: boolean;
+    browser: string;
+    viewport: string;
+    screenshotBefore?: string;
+    screenshotAfter?: string;
+    steps: Array<{
+      action: string;
+      description: string;
+      success: boolean;
+      error?: string;
+    }>;
+    issues: Array<{
+      severity: string;
+      title: string;
+      description: string;
+    }>;
+  }>;
+  testCategories?: string[];
   testResults?: Array<{
     type: string;
     severity: string;
@@ -75,6 +97,15 @@ async function run(): Promise<void> {
       })
       .filter(Boolean) as Array<{ width: number; height: number }>;
     const scope = core.getInput("scope") || "pr-changes";
+    const validTestCategories = ["visual", "interaction", "accessibility", "responsive", "performance"];
+    const testTypes = (core.getInput("test-types") || "")
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => validTestCategories.includes(t));
+    const excludeTests = (core.getInput("exclude-tests") || "")
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => validTestCategories.includes(t));
 
     const context = github.context;
     const pr = context.payload.pull_request;
@@ -109,6 +140,8 @@ async function run(): Promise<void> {
         browsers,
         viewports,
         scope,
+        ...(testTypes.length > 0 ? { testCategories: testTypes } : {}),
+        ...(excludeTests.length > 0 ? { excludeTests } : {}),
       }),
     });
 
@@ -121,9 +154,8 @@ async function run(): Promise<void> {
 
     const triggerData = (await triggerResponse.json()) as PRTestResponse;
     const testId = triggerData.prTestId;
-    const dashboardUrl =
-      triggerData.detailsUrl ||
-      `${apiUrl.replace("/api/v1", "")}/org/${orgId}/project/${projectId}/pr-test/${testId}`;
+    const appBaseUrl = apiUrl.replace("/api/v1", "");
+    const dashboardUrl = `${appBaseUrl}/org/${orgId}/project/${projectId}/pr-test/${testId}`;
 
     core.info(`Test triggered successfully: ${testId}`);
     core.setOutput("test-id", testId);
@@ -201,6 +233,8 @@ async function run(): Promise<void> {
         discoveries: testData?.discoveryResults || [],
         issues: testData?.testResults || [],
         segmentScreenshots: testData?.segmentScreenshots || [],
+        interactionResults: testData?.interactionResults || [],
+        testCategories: testData?.testCategories || [],
         runNumber: testData?.runNumber || 1,
         scope,
       });
@@ -261,6 +295,8 @@ async function postComment(
     discoveries: PRTestResponse["discoveryResults"];
     issues: PRTestResponse["testResults"];
     segmentScreenshots: PRTestResponse["segmentScreenshots"];
+    interactionResults: PRTestResponse["interactionResults"];
+    testCategories: string[];
     runNumber: number;
     scope: string;
   },
@@ -306,6 +342,10 @@ async function postComment(
       `| **Components** | ${data.components} tested |`,
       `| **Scope** | ${data.scope === 'pr-changes' ? 'PR Changes Only' : 'Full Page'} |`,
     ];
+
+    if (data.testCategories.length > 0) {
+      lines.push(`| **Test Types** | ${data.testCategories.join(', ')} |`);
+    }
 
     if (data.runNumber > 1) {
       lines.push(`| **Run** | #${data.runNumber} (includes context from ${data.runNumber - 1} previous run${data.runNumber - 1 > 1 ? 's' : ''}) |`);
@@ -362,6 +402,68 @@ async function postComment(
       }
     }
 
+    // Add interaction test results
+    if (data.interactionResults && data.interactionResults.length > 0) {
+      lines.push("", "### Interaction Tests");
+      lines.push("");
+
+      const passed = data.interactionResults.filter((r) => r.passed).length;
+      const failed = data.interactionResults.length - passed;
+      lines.push(`**${passed}** passed, **${failed}** failed out of **${data.interactionResults.length}** interaction test(s)`);
+      lines.push("");
+
+      for (const result of data.interactionResults) {
+        const icon = result.passed ? "✅" : "❌";
+        const typeEmoji = {
+          form: "📝",
+          navigation: "🔗",
+          modal: "🪟",
+          dropdown: "📋",
+          toggle: "🔀",
+          animation: "✨",
+          "api-call": "🌐",
+          other: "🔧",
+        }[result.behaviorType] || "🔧";
+
+        lines.push(`<details>`);
+        lines.push(`<summary>${icon} ${typeEmoji} <strong>${result.name}</strong> [${result.browser} @ ${result.viewport}]</summary>`);
+        lines.push("");
+        lines.push(`> ${result.description}`);
+        lines.push("");
+
+        if (result.steps.length > 0) {
+          lines.push("**Steps:**");
+          for (const step of result.steps) {
+            const stepIcon = step.success ? "✅" : "❌";
+            lines.push(`${stepIcon} ${step.description}${step.error ? ` — _${step.error}_` : ""}`);
+          }
+          lines.push("");
+        }
+
+        if (result.screenshotBefore || result.screenshotAfter) {
+          if (result.screenshotBefore) {
+            lines.push(`**Before:** ![Before](${result.screenshotBefore})`);
+          }
+          if (result.screenshotAfter) {
+            lines.push(`**After:** ![After](${result.screenshotAfter})`);
+          }
+          lines.push("");
+        }
+
+        if (result.issues.length > 0) {
+          lines.push("**Issues:**");
+          for (const issue of result.issues) {
+            const sev = issue.severity === "critical" ? "🔴" : issue.severity === "warning" ? "🟡" : "🔵";
+            lines.push(`- ${sev} ${issue.title}: ${issue.description.slice(0, 120)}`);
+          }
+          lines.push("");
+        }
+
+        lines.push(`</details>`);
+        lines.push("");
+      }
+    }
+
     // Add issues detail
     if (data.issues && data.issues.length > 0) {
       lines.push("", "### Issues Found");
@@ -412,18 +514,19 @@ function logSummary(
   criticalIssues: number,
   dashboardUrl: string,
 ): void {
+  const emoji = result === 'passed' ? '✅' : criticalIssues > 0 ? '🚨' : totalIssues > 0 ? '⚠️' : '❌';
+  const summaryMd = [
+    `## ${emoji} QualiBot Visual Testing Results`,
+    '',
+    '| Status | Result | Issues | Critical |',
+    '|--------|--------|--------|----------|',
+    `| ${status} | ${result} | ${totalIssues} | ${criticalIssues} |`,
+    '',
+    `[View Full Results →](${dashboardUrl})`,
+  ].join('\n');
+
   core.summary
-    .addHeading("QualiBot Visual Testing Results")
-    .addTable([
-      [
-        { data: "Status", header: true },
-        { data: "Result", header: true },
-        { data: "Issues", header: true },
-        { data: "Critical", header: true },
-      ],
-      [status, result, totalIssues.toString(), criticalIssues.toString()],
-    ])
-    .addLink("View Full Results", dashboardUrl)
+    .addRaw(summaryMd)
     .write();
 }
 
